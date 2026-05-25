@@ -34,10 +34,15 @@ const poolData = {
   ClientId: process.env.REACT_APP_COGNITO_CLIENT_ID || '',
 };
 
-const userPool = new CognitoUserPool(poolData);
+// Only create the pool if Cognito is configured — the SDK throws on empty UserPoolId
+const userPool: CognitoUserPool | null =
+  poolData.UserPoolId && poolData.ClientId
+    ? new CognitoUserPool(poolData)
+    : null;
 
 // Try to restore session from Cognito's built-in storage on load
 function tryRestoreSession(): void {
+  if (!userPool) return;
   try {
     const cognitoUser = userPool.getCurrentUser();
     if (cognitoUser) {
@@ -54,8 +59,15 @@ function tryRestoreSession(): void {
 
 // --- Helpers ---
 
+function assertPool(): CognitoUserPool {
+  if (!userPool) {
+    throw new Error('Cognito is not configured. Set REACT_APP_COGNITO_USER_POOL_ID and REACT_APP_COGNITO_CLIENT_ID.');
+  }
+  return userPool;
+}
+
 function getCognitoUser(email: string): CognitoUser {
-  return new CognitoUser({ Username: email, Pool: userPool });
+  return new CognitoUser({ Username: email, Pool: assertPool() });
 }
 
 function extractTokens(session: CognitoUserSession): AuthTokens {
@@ -96,7 +108,7 @@ export const cognitoService = {
         );
       }
 
-      userPool.signUp(email, password, attributes, [], (err, result) => {
+      assertPool().signUp(email, password, attributes, [], (err, result) => {
         if (err) {
           return reject(err);
         }
@@ -166,9 +178,11 @@ export const cognitoService = {
    * Sign out the current user and clear in-memory tokens.
    */
   signOut(): void {
-    const cognitoUser = userPool.getCurrentUser();
-    if (cognitoUser) {
-      cognitoUser.signOut();
+    if (userPool) {
+      const cognitoUser = userPool.getCurrentUser();
+      if (cognitoUser) {
+        cognitoUser.signOut();
+      }
     }
     currentTokens = null;
   },
@@ -216,7 +230,7 @@ export const cognitoService = {
    */
   changePassword(oldPassword: string, newPassword: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      const cognitoUser = userPool.getCurrentUser();
+      const cognitoUser = assertPool().getCurrentUser();
       if (!cognitoUser) {
         return reject(new Error('No authenticated user'));
       }
@@ -247,7 +261,7 @@ export const cognitoService = {
         return reject(new Error('No current session to refresh'));
       }
 
-      const cognitoUser = userPool.getCurrentUser();
+      const cognitoUser = assertPool().getCurrentUser();
       if (!cognitoUser) {
         return reject(new Error('No authenticated user'));
       }

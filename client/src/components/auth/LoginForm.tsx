@@ -44,7 +44,10 @@ const LoginForm: React.FC<LoginFormProps> = ({ onSwitchToRegister, onSwitchToFor
         setShowVerification(true);
       } else {
         // Handle both Cognito and local auth errors
-        const message = err?.response?.data?.error || err?.message || 'Invalid email or password.';
+        const apiError = err?.response?.data?.error;
+        const message = (typeof apiError === 'object' ? apiError?.message : apiError)
+          || err?.message
+          || 'Invalid email or password.';
         setError(message);
       }
     } finally {

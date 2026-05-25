@@ -1,12 +1,5 @@
 #!/bin/bash
-
-echo "PostgreSQL is ready. Running data migration..."
-
-# Set environment variables
-export DATABASE_URL="postgresql://postgres:password@localhost:5432/aws_practice"
-
-# Run the migration script
-cd /docker-entrypoint-initdb.d
-node ../migrate.js
-
-echo "Data migration completed!"
+# This script runs inside the PostgreSQL container on first init.
+# It only creates the schema (handled by 01-schema.sql).
+# Test data seeding is handled by the server on startup (see server/database/seedOnStart.js).
+echo "Schema initialized. Test data will be seeded by the server on first connection."

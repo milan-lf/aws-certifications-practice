@@ -36,7 +36,8 @@ const pool = new Pool({
   } : false
 });
 
-// Test database connection
+// Test database connection and seed data if empty
+const { seedIfEmpty } = require('./database/seedOnStart');
 pool.connect((err, client, release) => {
   if (err) {
     console.error('Error connecting to database:', err);
@@ -44,6 +45,8 @@ pool.connect((err, client, release) => {
   } else {
     console.log('Connected to PostgreSQL database');
     release();
+    // Seed test data on first run (non-blocking)
+    seedIfEmpty(pool).catch((e) => console.error('Seed error:', e.message));
   }
 });
 

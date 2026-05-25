@@ -77,8 +77,8 @@ tryRestore();
 
 export const localAuthService = {
   async login(email: string, password: string): Promise<{ user: LocalUser; tokens: LocalAuthTokens }> {
-    const response = await apiClient.post<AuthResponse['data']>('/auth/login', { email, password });
-    const { user, token, expiresIn } = response.data;
+    const response = await apiClient.post('/auth/login', { email, password });
+    const { user, token, expiresIn } = response.data.data;
     const tokens = storeToken(token, expiresIn);
     return { user, tokens };
   },
@@ -89,20 +89,20 @@ export const localAuthService = {
     firstName?: string,
     lastName?: string
   ): Promise<{ user: LocalUser; tokens: LocalAuthTokens }> {
-    const response = await apiClient.post<AuthResponse['data']>('/auth/register', {
+    const response = await apiClient.post('/auth/register', {
       email,
       password,
       firstName,
       lastName,
     });
-    const { user, token, expiresIn } = response.data;
+    const { user, token, expiresIn } = response.data.data;
     const tokens = storeToken(token, expiresIn);
     return { user, tokens };
   },
 
   async refresh(): Promise<LocalAuthTokens> {
-    const response = await apiClient.post<{ token: string; expiresIn: string }>('/auth/refresh');
-    const { token, expiresIn } = response.data;
+    const response = await apiClient.post('/auth/refresh');
+    const { token, expiresIn } = response.data.data;
     return storeToken(token, expiresIn);
   },
 

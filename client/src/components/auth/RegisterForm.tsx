@@ -103,10 +103,15 @@ const RegisterForm: React.FC<RegisterFormProps> = ({ onSwitchToLogin }) => {
       }
     } catch (err: any) {
       const code = err?.code || err?.name || '';
-      if (code === 'UsernameExistsException' || err?.response?.data?.code === 'EMAIL_EXISTS') {
+      const apiErrorCode = err?.response?.data?.error?.code || err?.response?.data?.code || '';
+      if (code === 'UsernameExistsException' || apiErrorCode === 'EMAIL_EXISTS') {
         setError('An account with this email already exists. Please login instead.');
       } else {
-        setError(err?.response?.data?.error || err?.message || 'Registration failed. Please try again.');
+        const apiError = err?.response?.data?.error;
+        const message = (typeof apiError === 'object' ? apiError?.message : apiError)
+          || err?.message
+          || 'Registration failed. Please try again.';
+        setError(message);
       }
     } finally {
       setIsLoading(false);
