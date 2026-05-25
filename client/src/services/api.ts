@@ -3,6 +3,17 @@ import { cognitoService } from './cognitoService';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 
+/**
+ * Detect auth mode based on environment variables.
+ * If Cognito pool/client IDs are set, use Cognito. Otherwise, local JWT.
+ */
+export function getAuthMode(): 'cognito' | 'local' {
+  const poolId = process.env.REACT_APP_COGNITO_USER_POOL_ID;
+  const clientId = process.env.REACT_APP_COGNITO_CLIENT_ID;
+  if (poolId && clientId) return 'cognito';
+  return 'local';
+}
+
 // Create axios instance with base configuration
 const api: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
@@ -59,20 +70,36 @@ function onRefreshFailed() {
 
 // --- Interceptors ---
 
-// Request interceptor — attach Cognito access token + CSRF token
+// Request interceptor — attach auth token + CSRF token
 api.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
-    // Attach Bearer token from Cognito in-memory store
-    const session = cognitoService.getCurrentSession();
-    if (session) {
-      config.headers.Authorization = `Bearer ${session.accessToken}`;
-      // Send ID token claims so server can use them for auto-create
-      try {
-        const payload = JSON.parse(atob(session.idToken.split('.')[1]));
-        config.headers['X-User-Email'] = payload.email || '';
-        config.headers['X-User-Given-Name'] = payload.given_name || '';
-        config.headers['X-User-Family-Name'] = payload.family_name || '';
-      } catch { /* ignore */ }
+    const mode = getAuthMode();
+
+    if (mode === 'cognito') {
+      // Attach Bearer token from Cognito in-memory store
+      const session = cognitoService.getCurrentSession();
+      if (session) {
+        config.headers.Authorization = `Bearer ${session.accessToken}`;
+        // Send ID token claims so server can use them for auto-create
+        try {
+          const payload = JSON.parse(atob(session.idToken.split('.')[1]));
+          config.headers['X-User-Email'] = payload.email || '';
+          config.headers['X-User-Given-Name'] = payload.given_name || '';
+          config.headers['X-User-Family-Name'] = payload.family_name || '';
+        } catch { /* ignore */ }
+      }
+    } else {
+      // Local mode — attach JWT from localStorage/memory
+      // Import dynamically to avoid circular deps at module load
+      const stored = localStorage.getItem('local_auth_token');
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          if (parsed.token && parsed.expiresAt > Date.now()) {
+            config.headers.Authorization = `Bearer ${parsed.token}`;
+          }
+        } catch { /* ignore */ }
+      }
     }
 
     // Attach CSRF token on mutating requests
@@ -94,33 +121,75 @@ api.interceptors.response.use(
 
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
+      const mode = getAuthMode();
 
-      if (!isRefreshing) {
-        isRefreshing = true;
-        try {
-          const tokens = await cognitoService.refreshSession();
-          isRefreshing = false;
-          onTokenRefreshed(tokens.accessToken);
+      if (mode === 'cognito') {
+        if (!isRefreshing) {
+          isRefreshing = true;
+          try {
+            const tokens = await cognitoService.refreshSession();
+            isRefreshing = false;
+            onTokenRefreshed(tokens.accessToken);
 
-          // Retry the original request with the new token
-          originalRequest.headers.Authorization = `Bearer ${tokens.accessToken}`;
-          return api(originalRequest);
-        } catch {
-          isRefreshing = false;
-          onRefreshFailed();
-          // Refresh failed — notify AuthContext to log out
-          window.dispatchEvent(new CustomEvent('auth:logout'));
-          return Promise.reject(error);
+            // Retry the original request with the new token
+            originalRequest.headers.Authorization = `Bearer ${tokens.accessToken}`;
+            return api(originalRequest);
+          } catch {
+            isRefreshing = false;
+            onRefreshFailed();
+            window.dispatchEvent(new CustomEvent('auth:logout'));
+            return Promise.reject(error);
+          }
         }
-      }
 
-      // Another request hit 401 while refresh is in-flight — queue it
-      return new Promise((resolve) => {
-        subscribeTokenRefresh((newToken: string) => {
-          originalRequest.headers.Authorization = `Bearer ${newToken}`;
-          resolve(api(originalRequest));
+        // Another request hit 401 while refresh is in-flight — queue it
+        return new Promise((resolve) => {
+          subscribeTokenRefresh((newToken: string) => {
+            originalRequest.headers.Authorization = `Bearer ${newToken}`;
+            resolve(api(originalRequest));
+          });
         });
-      });
+      } else {
+        // Local mode — try refresh endpoint
+        if (!isRefreshing) {
+          isRefreshing = true;
+          try {
+            const response = await axios.post(
+              `${API_BASE_URL}/auth/refresh`,
+              {},
+              {
+                headers: { Authorization: originalRequest.headers.Authorization },
+                withCredentials: true,
+              }
+            );
+            const { token } = response.data.data || response.data;
+            if (token) {
+              const stored = localStorage.getItem('local_auth_token');
+              const parsed = stored ? JSON.parse(stored) : {};
+              parsed.token = token;
+              parsed.expiresAt = Date.now() + 24 * 60 * 60 * 1000;
+              localStorage.setItem('local_auth_token', JSON.stringify(parsed));
+
+              isRefreshing = false;
+              onTokenRefreshed(token);
+              originalRequest.headers.Authorization = `Bearer ${token}`;
+              return api(originalRequest);
+            }
+          } catch {
+            isRefreshing = false;
+            onRefreshFailed();
+            window.dispatchEvent(new CustomEvent('auth:logout'));
+            return Promise.reject(error);
+          }
+        }
+
+        return new Promise((resolve) => {
+          subscribeTokenRefresh((newToken: string) => {
+            originalRequest.headers.Authorization = `Bearer ${newToken}`;
+            resolve(api(originalRequest));
+          });
+        });
+      }
     }
 
     // Handle rate limiting

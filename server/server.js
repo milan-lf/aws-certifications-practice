@@ -18,7 +18,7 @@ const cacheService = require('./utils/cacheService');
 cacheService.init();
 
 // Import middleware
-const { cognitoAuthMiddleware } = require('./middleware/cognitoAuth');
+const { authMiddleware, isCognitoConfigured } = require('./middleware/authResolver');
 const errorHandler = require('./middleware/errorHandler');
 const requestIdMiddleware = require('./middleware/requestId');
 const cookieParser = require('cookie-parser');
@@ -132,10 +132,10 @@ app.get('/health', (req, res) => {
 // API routes
 app.use('/api/auth', authRoutes);
 app.use('/api/tests', testRoutes);
-app.use('/api/progress', cognitoAuthMiddleware, progressRoutes);
-app.use('/api/users', cognitoAuthMiddleware, usersRoutes);
-app.use('/api/bookmarks', cognitoAuthMiddleware, bookmarksRoutes);
-app.use('/api/admin', cognitoAuthMiddleware, adminRoutes);
+app.use('/api/progress', authMiddleware, progressRoutes);
+app.use('/api/users', authMiddleware, usersRoutes);
+app.use('/api/bookmarks', authMiddleware, bookmarksRoutes);
+app.use('/api/admin', authMiddleware, adminRoutes);
 
 // 404 handler
 app.use('*', (req, res) => {
@@ -168,5 +168,6 @@ process.on('SIGINT', () => {
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`Auth mode: ${isCognitoConfigured() ? 'Cognito' : 'Local (bcrypt + JWT)'}`);
   console.log(`CORS origin: ${process.env.CORS_ORIGIN || 'http://localhost:3000'}`);
 });

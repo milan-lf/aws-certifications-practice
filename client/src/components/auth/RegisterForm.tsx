@@ -41,7 +41,7 @@ const RegisterForm: React.FC<RegisterFormProps> = ({ onSwitchToLogin }) => {
   const [registeredEmail, setRegisteredEmail] = useState('');
   const [isResending, setIsResending] = useState(false);
 
-  const { register, confirmRegistration } = useAuth();
+  const { register, confirmRegistration, authMode } = useAuth();
 
   // --- Real-time password checks ---
   const passwordChecks = useMemo(
@@ -84,7 +84,15 @@ const RegisterForm: React.FC<RegisterFormProps> = ({ onSwitchToLogin }) => {
         formData.lastName || undefined
       );
 
-      if (result.userConfirmed) {
+      if (authMode === 'local') {
+        // Local mode: user is auto-logged in, no verification needed
+        setSuccessMessage('Account created successfully!');
+        // The AuthContext already set the user, so the UI will redirect
+        return;
+      }
+
+      // Cognito mode
+      if (result && result.userConfirmed) {
         // Auto-confirmed (unlikely with email verification enabled)
         setSuccessMessage('Account created successfully! Redirecting to login…');
         setTimeout(() => onSwitchToLogin(), 1500);
@@ -95,10 +103,10 @@ const RegisterForm: React.FC<RegisterFormProps> = ({ onSwitchToLogin }) => {
       }
     } catch (err: any) {
       const code = err?.code || err?.name || '';
-      if (code === 'UsernameExistsException') {
+      if (code === 'UsernameExistsException' || err?.response?.data?.code === 'EMAIL_EXISTS') {
         setError('An account with this email already exists. Please login instead.');
       } else {
-        setError(err?.message || 'Registration failed. Please try again.');
+        setError(err?.response?.data?.error || err?.message || 'Registration failed. Please try again.');
       }
     } finally {
       setIsLoading(false);

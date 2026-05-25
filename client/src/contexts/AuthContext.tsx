@@ -1,5 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 import { cognitoService, SignUpResult } from '../services/cognitoService';
+import { localAuthService } from '../services/localAuthService';
+import { getAuthMode } from '../services/api';
 import { TOKEN_REFRESH_INTERVAL_MS, TOKEN_REFRESH_THRESHOLD_MS } from '../constants';
 
 // --- Types ---
@@ -15,8 +17,9 @@ interface AuthContextType {
   user: User | null;
   isLoading: boolean;
   isAuthenticated: boolean;
+  authMode: 'cognito' | 'local';
   login(email: string, password: string): Promise<void>;
-  register(email: string, password: string, firstName?: string, lastName?: string): Promise<SignUpResult>;
+  register(email: string, password: string, firstName?: string, lastName?: string): Promise<SignUpResult | void>;
   confirmRegistration(email: string, code: string): Promise<void>;
   logout(): void;
   forgotPassword(email: string): Promise<void>;
@@ -62,6 +65,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   // Guard to prevent concurrent refresh attempts
   const isRefreshingRef = useRef(false);
 
+  const authMode = getAuthMode();
   const isAuthenticated = !!user;
 
   // --- Cleanup helper ---
@@ -72,9 +76,10 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   }, []);
 
-  // --- Auto-refresh logic ---
+  // --- Auto-refresh logic (Cognito mode) ---
   const startRefreshTimer = useCallback(() => {
     clearRefreshTimer();
+    if (authMode !== 'cognito') return; // Local mode uses API interceptor for refresh
     refreshTimerRef.current = setInterval(async () => {
       if (isRefreshingRef.current) return;
       const session = cognitoService.getCurrentSession();
@@ -96,24 +101,43 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         }
       }
     }, TOKEN_REFRESH_INTERVAL_MS);
-  }, [clearRefreshTimer]);
+  }, [clearRefreshTimer, authMode]);
 
-  // --- Initialize: try to restore session from Cognito's current user ---
+  // --- Initialize: try to restore session ---
   useEffect(() => {
     const initializeAuth = async () => {
       try {
-        const session = cognitoService.getCurrentSession();
-        if (session && session.expiresAt > Date.now()) {
-          setUser(userFromIdToken(session.idToken));
-          startRefreshTimer();
-        } else if (session) {
-          // Token exists but expired — try a refresh
-          try {
-            const tokens = await cognitoService.refreshSession();
-            setUser(userFromIdToken(tokens.idToken));
+        if (authMode === 'cognito') {
+          const session = cognitoService.getCurrentSession();
+          if (session && session.expiresAt > Date.now()) {
+            setUser(userFromIdToken(session.idToken));
             startRefreshTimer();
-          } catch {
-            cognitoService.signOut();
+          } else if (session) {
+            // Token exists but expired — try a refresh
+            try {
+              const tokens = await cognitoService.refreshSession();
+              setUser(userFromIdToken(tokens.idToken));
+              startRefreshTimer();
+            } catch {
+              cognitoService.signOut();
+            }
+          }
+        } else {
+          // Local mode — check for stored token
+          const token = localAuthService.getCurrentToken();
+          if (token) {
+            // Decode the JWT to get user info
+            try {
+              const payload = JSON.parse(atob(token.split('.')[1]));
+              setUser({
+                id: payload.sub,
+                email: payload.email,
+                firstName: payload.firstName,
+                lastName: payload.lastName,
+              });
+            } catch {
+              localAuthService.signOut();
+            }
           }
         }
       } catch {
@@ -134,9 +158,19 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   // --- Auth methods ---
 
   const login = async (email: string, password: string): Promise<void> => {
-    const tokens = await cognitoService.signIn(email, password);
-    setUser(userFromIdToken(tokens.idToken));
-    startRefreshTimer();
+    if (authMode === 'cognito') {
+      const tokens = await cognitoService.signIn(email, password);
+      setUser(userFromIdToken(tokens.idToken));
+      startRefreshTimer();
+    } else {
+      const { user: localUser } = await localAuthService.login(email, password);
+      setUser({
+        id: String(localUser.id),
+        email: localUser.email,
+        firstName: localUser.firstName,
+        lastName: localUser.lastName,
+      });
+    }
   };
 
   const register = async (
@@ -144,22 +178,45 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     password: string,
     firstName?: string,
     lastName?: string
-  ): Promise<SignUpResult> => {
-    return cognitoService.signUp(email, password, firstName, lastName);
+  ): Promise<SignUpResult | void> => {
+    if (authMode === 'cognito') {
+      return cognitoService.signUp(email, password, firstName, lastName);
+    } else {
+      // Local mode — register and auto-login (no email confirmation needed)
+      const { user: localUser } = await localAuthService.register(email, password, firstName, lastName);
+      setUser({
+        id: String(localUser.id),
+        email: localUser.email,
+        firstName: localUser.firstName,
+        lastName: localUser.lastName,
+      });
+    }
   };
 
   const confirmRegistration = async (email: string, code: string): Promise<void> => {
-    await cognitoService.confirmSignUp(email, code);
+    if (authMode === 'cognito') {
+      await cognitoService.confirmSignUp(email, code);
+    }
+    // Local mode: no-op (no email confirmation)
   };
 
   const logout = (): void => {
-    cognitoService.signOut();
+    if (authMode === 'cognito') {
+      cognitoService.signOut();
+    } else {
+      localAuthService.signOut();
+    }
     setUser(null);
     clearRefreshTimer();
   };
 
   const forgotPassword = async (email: string): Promise<void> => {
-    await cognitoService.forgotPassword(email);
+    if (authMode === 'cognito') {
+      await cognitoService.forgotPassword(email);
+    } else {
+      // Local mode: not supported without an email service
+      throw new Error('Password reset is not available in local mode. Contact an admin or update the database directly.');
+    }
   };
 
   const confirmForgotPassword = async (
@@ -167,11 +224,19 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     code: string,
     newPassword: string
   ): Promise<void> => {
-    await cognitoService.confirmForgotPassword(email, code, newPassword);
+    if (authMode === 'cognito') {
+      await cognitoService.confirmForgotPassword(email, code, newPassword);
+    } else {
+      throw new Error('Password reset is not available in local mode.');
+    }
   };
 
   const changePassword = async (oldPassword: string, newPassword: string): Promise<void> => {
-    await cognitoService.changePassword(oldPassword, newPassword);
+    if (authMode === 'cognito') {
+      await cognitoService.changePassword(oldPassword, newPassword);
+    } else {
+      throw new Error('Password change is not yet supported in local mode.');
+    }
   };
 
   // --- Listen for 401 logout events dispatched by the API interceptor ---
@@ -188,6 +253,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     user,
     isLoading,
     isAuthenticated,
+    authMode,
     login,
     register,
     confirmRegistration,

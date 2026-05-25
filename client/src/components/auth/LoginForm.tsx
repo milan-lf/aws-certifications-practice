@@ -23,7 +23,7 @@ const LoginForm: React.FC<LoginFormProps> = ({ onSwitchToRegister, onSwitchToFor
   const [unverifiedEmail, setUnverifiedEmail] = useState('');
   const [isResending, setIsResending] = useState(false);
 
-  const { login, confirmRegistration } = useAuth();
+  const { login, confirmRegistration, authMode } = useAuth();
   const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -39,12 +39,13 @@ const LoginForm: React.FC<LoginFormProps> = ({ onSwitchToRegister, onSwitchToFor
       const code = err?.code || err?.name || '';
 
       if (code === 'UserNotConfirmedException') {
-        // Redirect to inline verification form
+        // Redirect to inline verification form (Cognito only)
         setUnverifiedEmail(email);
         setShowVerification(true);
       } else {
-        // Generic error for all auth failures (NotAuthorizedException, UserNotFoundException, etc.)
-        setError('Invalid email or password.');
+        // Handle both Cognito and local auth errors
+        const message = err?.response?.data?.error || err?.message || 'Invalid email or password.';
+        setError(message);
       }
     } finally {
       setIsLoading(false);
@@ -214,7 +215,7 @@ const LoginForm: React.FC<LoginFormProps> = ({ onSwitchToRegister, onSwitchToFor
       </form>
 
       <div className="auth-switch">
-        {onSwitchToForgotPassword && (
+        {onSwitchToForgotPassword && authMode === 'cognito' && (
           <p>
             <button
               type="button"

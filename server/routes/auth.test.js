@@ -2,15 +2,22 @@ const express = require('express');
 const request = require('supertest');
 
 // Mock cognitoAuthMiddleware — injects req.user when Authorization header present
+const mockAuthMiddleware = jest.fn((req, res, next) => {
+  const auth = req.header('Authorization');
+  if (!auth || !auth.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'No token', code: 'NO_TOKEN' });
+  }
+  req.user = { cognitoSub: 'sub-123', email: 'test@example.com', userId: 42 };
+  next();
+});
+
+jest.mock('../middleware/authResolver', () => ({
+  authMiddleware: (...args) => mockAuthMiddleware(...args),
+  isCognitoConfigured: () => true,
+}));
+
 jest.mock('../middleware/cognitoAuth', () => ({
-  cognitoAuthMiddleware: (req, res, next) => {
-    const auth = req.header('Authorization');
-    if (!auth || !auth.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'No token', code: 'NO_TOKEN' });
-    }
-    req.user = { cognitoSub: 'sub-123', email: 'test@example.com', userId: 42 };
-    next();
-  },
+  cognitoAuthMiddleware: (...args) => mockAuthMiddleware(...args),
 }));
 
 // Mock auditLogger
